@@ -3,30 +3,34 @@ from flask import request
 import json
 import csv
 import random
+import jwt
 
 # id is internally assigned. It is a unique random number between 1 to 100
 # register method JSON is name, contact number, address
 
 app = Flask(__name__)
 
-def authenticate(username, password):
-    '''returns None if authentication is successful'''
-    with open('data/user_creds.csv', 'r', newline='') as f:
+def authenticate(auth_token):
+      with open('data/auth_file.txt', 'r') as f:
+          l = f.read().split('\n')
+      if auth_token not in l:
+          return json.dumps({"message":"authentication failed"})
+
+def access(auth_token):
+    decoded = jwt.decode(auth_token, "imperium")
+    username = decoded["username"]
+    with open('data/user_creds.csv', 'r') as f:
         reader = csv.reader(f)
         l = list(reader)[1:]
-    uflag = False 
-    pflag = False    
-    for i in l:        
-        if i[1] == username:
-            uflag = True
-            if i[2] == password:
-                pflag = True
-            break
-    if not uflag:
-        return json.dumps({"login":"failed", "message":"no such user"})
-    elif not pflag:
-        return json.dumps({"login":"failed", "message":"incorrect password"})
-
+    for i in range(len(l)):
+        if l[i][1] == username:
+            id = l[i][0]
+    with open('data/user.csv', 'r') as f:
+        reader = csv.reader(f)
+        l = list(reader)[1:] 
+    for i in range(len(l)):               
+        if l[i][0] == id:
+            return l[i][-1]
 
 @app.route('/register', methods=["POST"])
 def register():
@@ -53,20 +57,9 @@ def register():
 def login():
     username = request.json["username"]
     password = request.json["password"]
-    res = authenticate(username, password)
-    if res is not None:   
-        return  res
-    return json.dumps({"login":"successful"})     
-
-
-@app.route('/modify', methods=['PATCH'])
-def modify():
-    username = request.json["username"]
-    password = request.json['password']
-    new_password = request.json['new_password']
     with open('data/user_creds.csv', 'r', newline='') as f:
         reader = csv.reader(f)
-        l = list(reader)  
+        l = list(reader)[1:]
     uflag = False 
     pflag = False    
     for i in l:        
@@ -74,26 +67,51 @@ def modify():
             uflag = True
             if i[2] == password:
                 pflag = True
-                i[2] = new_password
-            break
-    if not uflag:    
-        return json.dumps({"result":"fail", "message":"no such user"})
+                break
+    if not uflag:
+        return json.dumps({"login":"failed", "message":"no such user"})
     elif not pflag:
-        return json.dumps({"result":"fail", "message":"incorrect password"})
+        return json.dumps({"login":"failed", "message":"incorrect password"})
     else:
-        with open('data/user_creds.csv', 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerows(l)
-        return json.dumps({"message":"password modified sussesfully"})
-
+        payload = {"username":username, "password":password}
+        key = "imperium"
+        auth_token = jwt.encode(payload, key)
+        with open("data/auth_file.txt", 'a') as f:
+            f.write(auth_token.decode())
+            f.write('\n')
+        return json.dumps({"login":"successful", "auth_token":auth_token.decode()})
+         
+@app.route('/modify', methods=['PATCH'])
+def modify():
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
+    if res is not None:
+        return res
+    decoded = jwt.decode(auth_token, "imperium")
+    username = decoded["username"]
+    password = decoded["password"]    
+    new_password = request.json['new_password']
+    with open('data/user_creds.csv', 'r', newline='') as f:
+        reader = csv.reader(f)
+        l = list(reader)      
+    for i in l:        
+        if i[1] == username:
+            if i[2] == password:
+                i[2] = new_password
+            break    
+    with open('data/user_creds.csv', 'w', newline='') as f:
+        writer = csv.writer(f)
+        writer.writerows(l)
+    return json.dumps({"message":"password modified sussesfully"})
 
 @app.route("/delete", methods=["DELETE"])
 def delete():
-    username = request.json["username"]
-    password = request.json['password']
-    res = authenticate(username, password)
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    decoded = jwt.decode(auth_token, "imperium")
+    username = decoded["username"]
     # remove form user creds file    
     with open('data/user_creds.csv', 'r', newline='') as f:
         reader = csv.reader(f)
@@ -114,47 +132,64 @@ def delete():
             l1.remove(i)
     with open('data/user.csv', 'w', newline='') as f:
         writer = csv.writer(f)
-        writer.writerows(l1)        
+        writer.writerows(l1)   
+    with open('data/auth_file.txt', 'r') as f:
+          l = f.read().split('\n')
+    for i in l:
+        if auth_token == i:
+            l.remove(i)
+    with open('data/auth_file.txt', 'w') as f:
+          for i in l:
+              f.write(i)
+              f.write('\n')                       
     return json.dumps({"message":"user deleted successfully"})
 
-@app.route('/userlist', methods=["GET"])
+@app.route('/user/list', methods=["GET"])
 def userlist():
-    username = request.json["username"]
-    password = request.json["password"]
-    res = authenticate(username, password)
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
-    headers = ["id", "name", "contact_number", "address"]    
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}    
+    headers = ["id", "name", "contact_number", "address", "access"]    
     with open('data/user.csv', newline='') as f:
         reader = csv.DictReader(f, fieldnames=headers)   
         l = list(reader)[1:]
     return json.dumps({"users":l})     
 
-@app.route("/create_bus", methods=["POST"])
+@app.route("/bus/create", methods=["POST"])
 def create_bus():
     newbus = [request.json["id"], request.json["bus_number"], request.json["departure_loc"], request.json["arrival_loc"], request.json["journey_duration"], request.json["fare"]]
-    res = authenticate(request.json["username"],request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"} 
     with open('data/buses.csv', 'a', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(newbus)
     return json.dumps({"message":"New bus created successfully"})
 
-@app.route("/bus_details", methods=["POST"])
+@app.route("/bus/list", methods=["POST"])
 def bus_details():
-    res = authenticate(request.json["username"],request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}
     headers = ["id","bus_number","departure_loc","arrival_loc","journey_duration","fare"]    
     with open("data/buses.csv", 'r',newline='') as f:
         reader = csv.DictReader(f, fieldnames=headers)
         l = list(reader)[1:]
     return json.dumps({"busess":l})        
 
-@app.route("/search_bus", methods=["POST"])
+@app.route("/bus/search", methods=["POST"])
 def search_bus():
-    res = authenticate(request.json["username"], request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
     headers = ["id", "bus_number", "departure_loc", "arrival_loc", "journey_duration", "fare"]    
@@ -167,12 +202,14 @@ def search_bus():
             return json.dumps(i)    
     return json.dumps({"message":"no such bus"})
 
-@app.route("/delete_bus", methods=["DELETE"])
+@app.route("/bus/delete", methods=["DELETE"])
 def delete_bus():
-    res = authenticate(request.json["username"], request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
-    del_n = request.json["bus_number"]
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}
     with open("data/buses.csv", 'r', newline='') as f:
         reader = csv.reader(f)
         l = list(reader)
@@ -186,11 +223,14 @@ def delete_bus():
 
 # bus number is the primary key
 
-@app.route("/modify_bus", methods=["PATCH"])
+@app.route("/bus/modify", methods=["PATCH"])
 def modify_bus():
-    res = authenticate(request.json["username"], request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}    
     headers = ["id", "bus_number", "departure_loc", "arrival_loc", "journey_duration", "fare"]     
     with open("data/buses.csv", 'r', newline='') as f:
         reader = csv.DictReader(f, fieldnames=headers)
@@ -211,31 +251,38 @@ def modify_bus():
         writer.writerows(l)         
     return json.dumps({"message":"modification successful"})            
 
-@app.route("/create_train", methods=["POST"])
+@app.route("/train/create", methods=["POST"])
 def create_train():
     newtrain = [request.json["id"], request.json["train_number"], request.json["departure_loc"], request.json["arrival_loc"], request.json["journey_duration"], request.json["fare"]]
-    res = authenticate(request.json["username"],request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}    
     with open('data/trains.csv', 'a', newline='') as f:
         writer = csv.writer(f)
         writer.writerow(newtrain)
     return json.dumps({"message":"New train created successfully"})    
 
-@app.route("/train_details", methods=["POST"])
+@app.route("/train/list", methods=["POST"])
 def train_details():
-    res = authenticate(request.json["username"],request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}    
     headers = ["id","train_number","departure_loc","arrival_loc","journey_duration","fare"]    
     with open("data/trains.csv", 'r',newline='') as f:
         reader = csv.DictReader(f, fieldnames=headers)
         l = list(reader)[1:]
     return json.dumps({"trains":l}) 
 
-@app.route("/search_train", methods=["POST"])
+@app.route("/train/search", methods=["POST"])
 def search_train():
-    res = authenticate(request.json["username"], request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
     headers = ["id", "train_number", "departure_loc", "arrival_loc", "journey_duration", "fare"]    
@@ -248,11 +295,14 @@ def search_train():
             return json.dumps(i)    
     return json.dumps({"message":"no such train"})
 
-@app.route("/delete_train", methods=["DELETE"])
+@app.route("/train/delete", methods=["DELETE"])
 def delete_train():
-    res = authenticate(request.json["username"], request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}    
     del_n = request.json["train_number"]
     with open("data/trains.csv", 'r', newline='') as f:
         reader = csv.reader(f)
@@ -265,11 +315,14 @@ def delete_train():
         writer.writerows(l)
     return json.dumps({"message":"deletion successful"})
 
-@app.route("/modify_train", methods=["PATCH"])
+@app.route("/train/modify", methods=["PATCH"])
 def modify_train():
-    res = authenticate(request.json["username"], request.json["password"])
+    auth_token = request.json['auth_token']
+    res = authenticate(auth_token)
     if res is not None:
         return res
+    if access(auth_token) == "user":
+        return {"access":"denied", "message":"admin acess required"}    
     headers = ["id", "train_number", "departure_loc", "arrival_loc", "journey_duration", "fare"]     
     with open("data/trains.csv", 'r', newline='') as f:
         reader = csv.DictReader(f, fieldnames=headers)
