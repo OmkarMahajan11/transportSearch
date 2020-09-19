@@ -1,0 +1,5 @@
+id,train_number,departure_loc,arrival_loc,journey_duration,fare
+1,121,Delhi,Mumbai,11,500
+1,11,Banglore,Pune,20,800
+3,33,Chennai,Delhi,21,1500
+4,444,Pune,Banglore,11,700

@@ -1,0 +1,5 @@
+id,bus_number,departure_loc,arrival_loc,journey_duration,fare
+1,11,Hyderabad,Pune,12,500
+3,33,Banglore,Pune,20,800
+2,121,Delhi,Mumbai,11,500
+4,444,Pune,Banglore,11,700
